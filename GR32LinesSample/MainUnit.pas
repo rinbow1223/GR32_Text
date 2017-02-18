@@ -71,6 +71,7 @@ implementation
 
 procedure TForm1.FormCreate(Sender: TObject);
 begin
+  Gr32.SetGamma(1.0);
   Image.SetupBitmap;
 
   //setup the CloseBtn line/shape object (which will be drawn in BuildImage)

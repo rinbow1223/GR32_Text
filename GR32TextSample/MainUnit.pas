@@ -7,7 +7,7 @@ uses
   StdCtrls, ExtCtrls, GR32_Image, GR32_LowLevel,
   {$IFDEF FPC} LResources, {$ENDIF}
   GR32, GR32_Polygons, GR32_Math, GR32_Transforms, GR32_Blend,
-  GR32_Layers, GR32_Lines, GR32_Misc, GR32_Text, ComCtrls;
+  GR32_Layers, GR32_Misc, GR32_Text, ComCtrls;
 
 type
 
@@ -80,9 +80,9 @@ uses DateUtils;
 //------------------------------------------------------------------------------
 
 procedure TForm1.FormCreate(Sender: TObject);
-var
-  fontSmoothingEnabled: longBool;
 begin
+  GR32.SetGamma(1.1); //text looks a bit thin at higher gammas
+
   Image.SetupBitmap;
   Image.Bitmap.DrawMode := dmOpaque;
   Image.Bitmap.CombineMode := cmBlend;
@@ -102,13 +102,6 @@ begin
   Image4.Bitmap.DrawMode := dmOpaque;
   Image4.Bitmap.CombineMode := cmBlend;
   Image4.Bitmap.Clear($FFE8E8D8);
-
-  //enabling LCDDraw usually improves the sharpness and clarity of the text,
-  //especially on LCD displays.
-  //Here we get the OS to decide whether to use LCD font smoothing ...
-  //(However, try setting this variable to false and see the difference!)
-  SystemParametersInfo(SPI_GETFONTSMOOTHING, 0, @fontSmoothingEnabled, 0);
-  GR32_Text.Text32LCDDrawDefault := fontSmoothingEnabled;
 
   ttfc := TrueTypeFontClass.Create(self.Font.Name, 16);
   ttfc.Hinted := true;
@@ -479,9 +472,9 @@ end;
 
 procedure TForm1.RedrawBitmapPage3;
 var
-  i: integer;
   pts, upperPts, lowerPts: TArrayOfFixedPoint;
-  polyPts: TArrayOfArrayOfFixedPoint;
+  ppFx: TArrayOfArrayOfFixedPoint;
+  ppFt: TArrayOfArrayOfFloatPoint;
   bmp: TBitmap32;
 const
   txt: wideString = 'Text between paths ...';
@@ -509,17 +502,17 @@ begin
   with TText32.Create do
   try
     Skew(sbSkewX.Position/10, 0);
-    polyPts := GetBetweenPaths(lowerPts,upperPts,'GR32', ttfc96);
+    ppFx := GetBetweenPaths(lowerPts,upperPts,'GR32', ttfc96);
   finally
     free;
   end;
 
   //create a 3D effect for the text ...
-  SimpleShadow(Image3.Bitmap,polyPts, -3, -3, NO_SHADOW_FADE, $FFFFFFFF, true);
-  SimpleShadow(Image3.Bitmap,polyPts, 2, 2, NO_SHADOW_FADE, $88333300, true);
+  SimpleShadow(Image3.Bitmap,ppFx, -3, -3, NO_SHADOW_FADE, $FFFFFFFF, true);
+  SimpleShadow(Image3.Bitmap,ppFx, 2, 2, NO_SHADOW_FADE, $88333300, true);
 
   //finally, fill the text with a green, yellow and red color gradient ...
-  SimpleGradientFill(Image3.Bitmap, polyPts, $0,
+  SimpleGradientFill(Image3.Bitmap, ppFx, $0,
     [$80FF0000,$80FF0000,$80FFFF00,$FFFFFF00,$FF00FF00],115);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -540,32 +533,23 @@ begin
   try
     Spacing := 10;
     Skew(sbSkewX.Position/10, 0);
-    polyPts := GetBetweenPaths(lowerPts,upperPts,txt,ttfc96);
+    ppFx := GetBetweenPaths(lowerPts,upperPts,txt,ttfc96);
   finally
     free;
   end;                     
 
   //3D drop shadow effect ...
-  SimpleShadow(Image3.Bitmap,polyPts, 4, 4, MINIMUM_SHADOW_FADE, $FF330066, true);
+  SimpleShadow(Image3.Bitmap,ppFx, 4, 4, MINIMUM_SHADOW_FADE, $FF330066, true);
 
   //draw a 3px wide text outline (will be partly obscured by following pattern)
-  with TLine32.Create do
-  try
-    EndStyle := esClosed;
-    for i := 0 to high(polyPts) do
-    begin
-      setPoints(polyPts[i]);
-      draw(Image3.Bitmap, 3, $FF330066);
-    end;
-  finally
-    free;
-  end;
+  ppFt := MakeArrayOfArrayOfFloatPoints(ppFx);
+  PolyPolylineFS(image3.Bitmap, ppFt, $FF330066, true, 3);
 
   //finally fill the text with a bitmap pattern ...
   bmp := TBitmap32.Create;
   try
     bmp.LoadFromResourceName(hInstance, 'PATTERN2');
-    SimpleFill(Image3.Bitmap, polyPts, $0, bmp);
+    SimpleFill(Image3.Bitmap, ppFx, $0, bmp);
   finally
     bmp.Free;
   end;
@@ -587,16 +571,16 @@ begin
   with TText32.Create do
   try
     Skew(sbSkewX.Position/10, 0);
-    polyPts := GetBetweenPaths(lowerPts,upperPts,'  Graphics  ',ttfc96);
+    ppFx := GetBetweenPaths(lowerPts,upperPts,'  Graphics  ',ttfc96);
   finally
     free;
   end;
 
   //3D effects ...
-  SimpleShadow(Image3.Bitmap,polyPts,-3,-3,NO_SHADOW_FADE, clWhite32, True);
-  SimpleShadow(Image3.Bitmap,polyPts, 2, 2,NO_SHADOW_FADE, $AA333300, True);
+  SimpleShadow(Image3.Bitmap,ppFx,-3,-3,NO_SHADOW_FADE, clWhite32, True);
+  SimpleShadow(Image3.Bitmap,ppFx, 2, 2,NO_SHADOW_FADE, $AA333300, True);
 
-  SimpleRadialFill(Image3.Bitmap,polyPts,[$FFF0F080,$FFFF8080]);
+  SimpleRadialFill(Image3.Bitmap,ppFx,[$FFF0F080,$FFFF8080]);
 ////////////////////////////////////////////////////////////////////////////////
 // Text in a circle (but still between 2 paths) ...                             
 ////////////////////////////////////////////////////////////////////////////////
@@ -607,29 +591,32 @@ begin
 
   //divide the ellipse into a top half and bottom half
   upperPts := GetArcPoints(FloatRect(330,110,510,290),0,180);
-  //GetArcPoints returns text in an anticlockwise direction so it's important
+  //GetArcPoints returns the arc in an anticlockwise direction so it's important
   //to make the curve (like the text) go from left to right ...
   upperPts := ReversePoints(upperPts);
-  //lowerPts will already be in the right direction ...
+  //lowerPts don't need reversing ...
   lowerPts := GetArcPoints(FloatRect(330,110,510,290),180,0);
+
+  SimpleLine(Image3.Bitmap, upperPts, $8088FF66);
+  SimpleLine(Image3.Bitmap, lowerPts, $8088FF66);
 
   //now get the text outline points ...
   with TText32.Create do
   try
     Skew(sbSkewX.Position/10, 0);
-    polyPts := GetBetweenPaths(lowerPts,upperPts,'  Delphi  ',ttfc96);
+    ppFx := GetBetweenPaths(lowerPts,upperPts,'  Delphi  ',ttfc96);
   finally
     free;
   end;
 
   //3D effects ...
-  SimpleShadow(Image3.Bitmap,polyPts,-3,-3,NO_SHADOW_FADE, clWhite32, True);
-  SimpleShadow(Image3.Bitmap,polyPts, 2, 2,NO_SHADOW_FADE, $AA333300, True);
+  SimpleShadow(Image3.Bitmap,ppFx,-3,-3,NO_SHADOW_FADE, clWhite32, True);
+  SimpleShadow(Image3.Bitmap,ppFx, 2, 2,NO_SHADOW_FADE, $AA333300, True);
 
   bmp := TBitmap32.Create;
   try
     bmp.LoadFromResourceName(hInstance, 'PATTERN');
-    SimpleFill(Image3.Bitmap, polyPts, $0, bmp);
+    SimpleFill(Image3.Bitmap, ppFx, $0, bmp);
   finally
     bmp.Free;
   end;
@@ -702,7 +689,6 @@ begin
   //now draw text within the two bounding rectangles ...
   text32 := TText32.Create;
   try
-    text32.LCDDraw := false;
     text32.Scale(sbScaleX.Position/50, sbScaleY.Position/50);
     text32.Skew(sbSkewX.Position/10, 0);
     text32.draw(Image4.Bitmap, rec1, txt1, ttfc, clBlack32, aJustify, aMiddle, true);
@@ -732,7 +718,7 @@ begin
     linePos := 0;
     textArrayPos := 0;
     ttfc.GetTextMetrics(tm);
-    lineHeight := round(tm.tmHeight * text32.ScaleY);
+    lineHeight := round(tm.tmHeight * text32.ScaleY *6/5);
     //set starting point for text drawing ...
     startPt := FloatPoint(rec1.Left, rec1.Top + lineHeight);
 

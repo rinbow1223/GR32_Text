@@ -19,7 +19,7 @@ unit GR32_Text;
  * the Initial Developer. All Rights Reserved.
  *
  * The Initial Developer of the code in GR32_Text.pas is Angus Johnson
- * <angus@angusj.com>. GR32_Text.pas code is Copyright (C) 2009-2010.
+ * <angus@angusj.com>. GR32_Text.pas code is Copyright (C) 2009-2012.
  * All Rights Reserved.
  *
  * Acknowledgements:
@@ -27,7 +27,7 @@ unit GR32_Text;
  * TLCDDistributionLut class provided by Akaiten and is based on code from
  * Maxim Shemanarev.
  *
- * Version 3.92 (Last updated 10-Nov-2010)
+ * Version 4.0 (Last updated 5-Aug-2012)
  *
  *  The TText32 class renders text using the Windows API function
  *  GetGlyphOutline(). This requires TrueType fonts.
@@ -40,25 +40,18 @@ unit GR32_Text;
 
 interface
 
-{.$DEFINE GR32_PolygonsEx}
-
 {$I GR32.inc}
 
-{$IFDEF COMPILER7}
 {$WARN UNSAFE_CODE OFF}
 {$WARN UNSAFE_TYPE OFF}
 {$WARN UNSAFE_CAST OFF}
-{$ENDIF}
 
 
 {$IFDEF MSWINDOWS}  //numerous Windows API dependencies
 
 uses
-  Windows, Classes, SysUtils, Math, Graphics, Types, GR32, GR32_LowLevel,
-{$IFDEF GR32_PolygonsEx}
-  GR32_PolygonsEx, GR32_VPR,
-{$ENDIF}
-  GR32_Blend, GR32_Math, GR32_Polygons, GR32_Transforms, GR32_Misc, GR32_Lines;
+  Windows, Classes, SysUtils, Graphics, Types, GR32, GR32_Blend, GR32_Math,
+  GR32_Polygons, GR32_VectorUtils, GR32_Transforms, GR32_Backends, GR32_Misc;
 
 type
   TAlignH = (aLeft, aRight, aCenter, aJustify);
@@ -176,12 +169,9 @@ type
     procedure SetSkewY(value: single);
     procedure SetPadding(value: single);
     procedure PrepareMatrices;
-    procedure DrawInternal(bitmap: TBitmap32; const text: UnicodeString;
-      ttFont: TTrueTypeFont; color: TColor32);
-    procedure DrawInternalLCD(bitmap: TBitmap32; const text: UnicodeString;
-      ttFont: TTrueTypeFont; color: TColor32);
     function GetCurrentPos: TFixedPoint;
     procedure SetCurrentPos(newPos: TFixedPoint);
+    procedure SetLCDDraw(value: boolean);
  protected
     procedure GetTextMetrics(const text: UnicodeString;
       ttFont: TTrueTypeFont; const InsertionPt: TFixedPoint;
@@ -311,7 +301,7 @@ type
     property CurrentPos: TFixedPoint read GetCurrentPos write SetCurrentPos;
     //LCDDraw: subpixel antialiasing for much smoother text on LCD displays
     //(see http://www.grc.com/cttech.htm for more info on this)
-    property LCDDraw: boolean read fLCDDraw write fLCDDraw;
+    property LCDDraw: boolean read fLCDDraw write SetLCDDraw;
     //Inverted - flips text vertically
     property Inverted: boolean read fInverted write SetInverted;
     //Mirrored - flips text horizontally
@@ -323,15 +313,27 @@ type
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
+ TPolyPolygonFunc = procedure(Bitmap: TBitmap32;
+   const Points: TArrayOfArrayOfFloatPoint;
+   Color: TColor32; FillMode: TPolyFillMode = pfAlternate;
+   Transformation: TTransformation = nil);
 var
   TrueTypeFontClass: TTrueTypeFontClass = TTrueTypeFontAnsiCache;
 
   //*Text32LCDDrawDefault: when set to true LCD sub-pixel antialiasing
   //*will be enabled by default whenever a Text32 object is created.
-  //*Suggest setting with -> SystemParametersInfo(SPI_GETFONTSMOOTHING, ...)
+  //*See initialization section below.
   Text32LCDDrawDefault: boolean = false;
 
+  PolyPolygonFunc: TPolyPolygonFunc = GR32_Polygons.PolyPolygonFS;
+  PolyPolygonFuncLCD: TPolyPolygonFunc = GR32_Polygons.PolyPolygonFS_LCD;
+
 const
+{$T-}
+  PolyPolygonFunction: array[boolean] of ^TPolyPolygonFunc = (
+    (@@PolyPolygonFunc), (@@PolyPolygonFuncLCD));
+{$T+}
+
   identity_mat2: TMat2 =
     (eM11:(fract: 0; value:1); eM12:(fract: 0; value:0);
      eM21:(fract: 0; value:0); eM22:(fract: 0; value:1));
@@ -376,18 +378,8 @@ function FloatSize(sx, sy: single): TFloatSize;
 procedure SimpleText(bmp: TBitmap32; font: TFont; X, Y: integer;
   const widetext: widestring; color: TColor32);
 
-//*SimpleTextLCD: While similar to SimpleText, SimpleTextLCD usually draws text
-//*a little clearer and therefore is usually a little easier to read, especially
-//*at smaller font sizes. However unlike SimpleText it requires a TrueType font.
-procedure SimpleTextLCD(bmp: TBitmap32; font: TFont; X, Y: integer;
-  const wideText: UnicodeString; color: TColor32);
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
-
-procedure LCDPolygonSmoothing(bitmap, tmpBitmap: TBitmap32;
-  ppts: TArrayOfArrayOfArrayOfFixedPoint;
-  TextColor: TColor32; BkColor: TColor32 = $0);
-
 
 {$ENDIF} //MSWINDOWS
 
@@ -405,69 +397,10 @@ const
   GGO_BEZIER      = $3;
   TT_PRIM_CSPLINE = $3;
 
-  SPACE: wideChar = ' ';
+  SPACE: wideChar = #32;
+  TAB  : wideChar = #9;
   LF   : wideChar = #10;
   CR   : wideChar = #13;
-
-type
-  TLCDDistributionLut = class
-  private
-    FPrimary,
-    FSecondary,
-    FTertiary: array [0..255] of byte;
-    function GetPrimary(Index: integer): byte;
-    function GetSecondary(Index: integer): byte;
-    function GetTertiary(Index: integer): byte;
-  public
-    constructor Create;
-    property Primary[Index: integer]: byte read GetPrimary;
-    property Secondary[Index: integer]: byte read GetSecondary;
-    property Tertiary[Index: integer]: byte read GetTertiary;
-  end;
-
-var
-  //This 'look up table' only needs to be a singleton object ...
-  lut: TLCDDistributionLut;
-
-//------------------------------------------------------------------------------
-// TLCDDistributionLut methods ...
-//------------------------------------------------------------------------------
-
-constructor TLCDDistributionLut.Create;
-const
-  Prim      = 1;
-  Second    = 0.1;
-  Tert      = 0.01;
-var
-  norm: double;
-  i: integer;
-begin
-  norm := 1 / (Prim + 2*Second + 2*Tert);
-  for i := 0 to 255 do
-  begin
-    FPrimary[i] := Floor(Prim * norm * i);
-    FSecondary[i] := Floor(Second * norm * i);
-    FTertiary[i] := Floor(Tert * norm * i);
-  end;
-end;
-//------------------------------------------------------------------------------
-
-function TLCDDistributionLut.GetPrimary(Index: integer): byte;
-begin
-  Result := FPrimary[Index];
-end;
-//------------------------------------------------------------------------------
-
-function TLCDDistributionLut.GetSecondary(Index: integer): byte;
-begin
-  Result := FSecondary[Index];
-end;
-//------------------------------------------------------------------------------
-
-function TLCDDistributionLut.GetTertiary(Index: integer): byte;
-begin
-  Result := FTertiary[Index];
-end;
 
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
@@ -572,7 +505,7 @@ var
   cosAng, sinAng: single;
   tmp: TMat2;
 begin
-  sincos(angle_radians, sinAng, cosAng);
+  GR32_Math.sincos(angle_radians, sinAng, cosAng);
   GR32.TFixed(tmp.eM11) := trunc(cosAng*FixedOne);
   GR32.TFixed(tmp.eM21) := trunc(sinAng*FixedOne);
   GR32.TFixed(tmp.eM12) := trunc(-sinAng*FixedOne);
@@ -594,11 +527,11 @@ var
   i: integer;
 begin
   result := widetext;
-  i := pos(#13, widetext);
+  i := pos(#13, result);
   while i <> 0 do
   begin
     delete(result,i,1);
-    i := pos(#13, widetext);
+    i := pos(#13, result);
   end;
 end;
 //------------------------------------------------------------------------------
@@ -738,180 +671,6 @@ function GetTTFontCharMetrics(MemDC: HDC; wc: wideChar; dx, dy: single;
 begin
   result := windows.GetGlyphOutlineW(MemDC, cardinal(wc),
     GGO_METRICS, gm, 0, nil, mat2) <> GDI_ERROR;
-end;
-//------------------------------------------------------------------------------
-
-//Font smoothing based on an LCD's RGB left-to-right sub-pixel alignment ...
-procedure LCDPolygonSmoothing(bitmap, tmpBitmap: TBitmap32;
-  ppts: TArrayOfArrayOfArrayOfFixedPoint;
-  TextColor: TColor32; BkColor: TColor32 = $0);
-var
-  i,j,k,m,lft,rt,dx,dy: integer;
-  pos: TFloatPoint;
-  r: TRect;
-  rec: TFixedRect;
-  srcEntry, destEntry: PColor32Entry;
-  v: byte;
-  A,B,txtClr: TColor32Entry;
-  tmpBitmapWasAssigned: boolean;
-{$IFDEF GR32_PolygonsEx}
-  ppts2: TArrayOfArrayOfFloatPoint;
-{$ENDIF}
-begin
-  if not assigned(bitmap) then exit;
-
-  tmpBitmapWasAssigned := assigned(tmpBitmap);
-  if not tmpBitmapWasAssigned then tmpBitmap := TBitmap32.Create;
-  try
-    //stretch points times 3 along the X axis to prepare for sub-pixel
-    //antialiasing and also get the boundsrect of these stretched points ...
-    rec.Left := Fixed(32767); rec.Right := Fixed(-32767);
-    rec.Top := Fixed(32767); rec.Bottom := Fixed(-32767);
-    for i := 0 to high(ppts) do
-      for j := 0 to high(ppts[i]) do
-        for k := 0 to high(ppts[i][j]) do
-          with ppts[i][j][k] do
-          begin
-            //scale X * 3 ...
-            X := X *3;
-            //update boundsrect ...
-            if X < rec.left then rec.left := X;
-            if X > rec.right then rec.right := X;
-            if Y < rec.top then rec.top := Y;
-            if Y > rec.bottom then rec.bottom := Y;
-          end;
-
-    if rec.left > rec.Right then exit; //ie nothing to draw
-
-    r := MakeRect(rec, rrOutside);
-    InflateRect(r,2,1);
-
-    OffsetPolyPolyPoints(ppts, -r.Left, -r.Top);
-    dx := r.Left;
-    dy := r.Top;
-    OffsetRect(r,-dx,-dy);
-
-    //nb: The background needs to be opaque to apply sub-pixel coloring because
-    //the algorithm needs both background and foreground colors. However if the
-    //background isn't opaque we'll just apply alpha anti-aliasing instead.
-
-    tmpBitmap.SetSize(r.Right, r.Bottom);
-    tmpBitmap.Clear;
-
-    for i := 0 to high(ppts) do
-    begin
-      //draw the stretched polygon onto tmpBmp (white pen on black here)
-      {$IFDEF GR32_PolygonsEx}
-      ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
-      PolyPolygonFS(tmpBitmap, ppts2, clWhite32, pfWinding);
-      {$ELSE}
-      PolyPolygonXS(tmpBitmap, ppts[i], clWhite32, pfWinding);
-      {$ENDIF}
-    end;
-
-    //now apply sub-pixel coloring to tmpBmp ...
-    for i := 0 to r.Bottom - 1 do
-    begin
-      srcEntry := PColor32Entry(tmpBitmap.ScanLine[i]);
-      destEntry := srcEntry;
-
-      m := 1;
-      A.ARGB := clBlack32;
-      B.ARGB := clBlack32;
-
-      for j := 0 to r.Right - 1 do
-      begin
-        v := srcEntry.R;
-        if (m = 0) then
-        begin
-          Inc(A.R, lut.Tertiary[v]);
-          Inc(A.G, lut.Secondary[v]);
-          Inc(A.B, lut.Primary[v]);
-          Inc(B.R, lut.Secondary[v]);
-          Inc(B.G, lut.Tertiary[v]);
-          Inc(m);
-        end
-        else if (m = 1) then
-        begin
-          Inc(A.G, lut.Tertiary[v]);
-          Inc(A.B, lut.Secondary[v]);
-          Inc(B.R, lut.Primary[v]);
-          Inc(B.G, lut.Secondary[v]);
-          Inc(B.B, lut.Tertiary[v]);
-          Inc(m);
-        end else
-        begin
-          Inc(A.B, lut.Tertiary[v]);
-          Inc(B.R, lut.Secondary[v]);
-          Inc(B.G, lut.Primary[v]);
-          Inc(B.B, lut.Secondary[v]);
-
-          destEntry^ := A;
-          inc(destEntry);
-          destEntry^ := B;
-          A := B;
-          B.ARGB := clBlack32;
-          Inc(B.R, lut.Tertiary[v]);
-          m := 0;
-        end;
-        inc(srcEntry);
-      end;
-      inc(destEntry);
-      destEntry^ := B;
-    end;
-
-    dx := dx div 3;
-    if dx = 0 then dx := 1;
-    //now blend onto bitmap ...
-    if AlphaComponent(BkColor) <> $0 then BkColor := BkColor or $FF000000;
-    txtClr.ARGB := textColor;
-
-    lft := max(0,-dx);
-    rt := min(r.Right div 3 +1, bitmap.Width -dx -1);
-    for i := max(0,-dy) to min(r.Bottom - 1, bitmap.Height -dy -1) do
-    begin
-      srcEntry := PColor32Entry(tmpBitmap.ScanLine[i]);
-      destEntry := PColor32Entry(bitmap.ScanLine[dy + i]);
-      inc(srcEntry, lft);
-      inc(destEntry,dx + lft);
-      for j := 0 to rt -lft do
-      begin
-        if srcEntry.ARGB <> clBlack32 then
-        begin
-          A := destEntry^;
-          //if the anti-alias byte is opaque or close to it, do
-          //sub-pixel anti-aliasing, otherwise do alpha channel anti-aliasing
-          if (A.A < 255) then
-            if (bitmap.DrawMode = dmOpaque) or (A.A >= $CC) then A.A := 255
-            else if BkColor <> $0 then A.ARGB := BkColor;
-
-          if (A.A = 255) then
-          begin
-            //do sub-pixel anti-aliasing ...
-            A.R := (A.R shl 16 + (txtClr.R - A.R)*(srcEntry.R * txtClr.A)) shr 16;
-            A.G := (A.G shl 16 + (txtClr.G - A.G)*(srcEntry.G * txtClr.A)) shr 16;
-            A.B := (A.B shl 16 + (txtClr.B - A.B)*(srcEntry.B * txtClr.A)) shr 16;
-            destEntry^ := A;
-          end else
-          begin
-            //do alpha channel anti-aliasing ...
-            A.R := txtClr.R;
-            A.G := txtClr.G;
-            A.B := txtClr.B;
-            A.A := Intensity(srcEntry.ARGB)* txtClr.A shr 8;
-            if bitmap.CombineMode = cmBlend then
-              BlendMem(A.ARGB, destEntry.ARGB) else
-              MergeMem(A.ARGB, destEntry.ARGB);
-          end;
-        end;
-        inc(srcEntry);
-        inc(destEntry);
-      end;
-    end;
-    EMMS;
-  finally
-    if not tmpBitmapWasAssigned then tmpBitmap.Free;
-  end;
 end;
 
 //------------------------------------------------------------------------------
@@ -1341,24 +1100,16 @@ procedure TText32.Draw(bitmap: TBitmap32; const boundsRect: TFloatRect;
 var
   i: integer;
   ppts: TArrayOfArrayOfArrayOfFixedPoint;
-{$IFDEF GR32_PolygonsEx}
   ppts2: TArrayOfArrayOfFloatPoint;
-{$ENDIF}
+  PolyPolygonFn: TPolyPolygonFunc;
 begin
   ppts := GetEx(boundsRect, text, ttFont, alignH, alignV, forceWordBreak);
-  if fLCDDraw then
-    LCDPolygonSmoothing(bitmap, fTmpBmp, ppts, color)
-  else
-{$IFDEF GR32_PolygonsEx}
-    for i := 0 to high(ppts) do
-    begin
-      ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
-      PolyPolygonFS(bitmap, ppts2, color, pfWinding);
-    end;
-{$ELSE}
-    for i := 0 to high(ppts) do
-      PolyPolygonXS(bitmap, ppts[i], color, pfWinding);
-{$ENDIF}
+  PolyPolygonFn := PolyPolygonFunction[fLCDDraw]^;
+  for i := 0 to high(ppts) do
+  begin
+    ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
+    PolyPolygonFn(bitmap, ppts2, color, pfWinding);
+  end;
 end;
 //------------------------------------------------------------------------------
 
@@ -1437,7 +1188,7 @@ begin
           textBeforeLineFeed := true;
           inc(lineCnt);
         end;
-        while theText[cntChrsThatFit+1] = SPACE do inc(cntChrsThatFit);
+        while theText[cntChrsThatFit+1] <= SPACE do inc(cntChrsThatFit);
         delete(theText,1,cntChrsThatFit);
         yPos := yPos + lineHeight;
       end;
@@ -1478,7 +1229,7 @@ begin
       textBeforeLineFeed := true;
 
       //ie trim any trailing spaces in 'theLine' ...
-      while theText[cntChrsThatFit] = SPACE do dec(cntChrsThatFit);
+      while theText[cntChrsThatFit] <= SPACE do dec(cntChrsThatFit);
       theLine := copy(theText, 1, cntChrsThatFit);
 
       case alignH of
@@ -1509,9 +1260,9 @@ begin
             lineWidth := GetTextWidth(theLine, ttFont);
             //count no. spaces in theLine ...
             spcCnt := 0;
-            for i := 1 to length(theLine) do if theLine[i] = ' ' then inc(spcCnt);
+            for i := 1 to length(theLine) do if theLine[i] <= SPACE then inc(spcCnt);
             j := cntChrsThatFit+1;
-            while (j < len) and (theText[j] = SPACE) do inc(j);
+            while (j < len) and (theText[j] <= SPACE) do inc(j);
             if (spcCnt = 0) or (cntChrsThatFit = len) or (theText[j] = LF) then
             begin
               i := length(result);
@@ -1537,7 +1288,7 @@ begin
                 setlength(result, k+1);
                 result[k] := Get(pt.X, pt.Y, copy(theLine,1,i), ttFont, pt);
                 inc(i);
-                while (i <= j) and (theLine[i] = SPACE) do
+                while (i <= j) and (theLine[i] <= SPACE) do
                 begin
                   dec(spcCnt);
                   if spcCnt = 1 then
@@ -1551,7 +1302,7 @@ begin
             end;
           end;
       end;
-      while theText[cntChrsThatFit+1] = SPACE do inc(cntChrsThatFit);
+      while theText[cntChrsThatFit+1] <= SPACE do inc(cntChrsThatFit);
       delete(theText,1,cntChrsThatFit);
       dec(len, cntChrsThatFit);
       yPos := yPos + lineHeight;
@@ -1605,7 +1356,9 @@ begin
   begin
     i := j;
     //try to break the text on a word break ...
-    while (j <= len) and (text[j] = SPACE) do inc(j); //ignore leading spaces
+    //(nb: to avoid CharInSet, we check for TAB & SPACE separately)
+    while (j <= len) and
+      ((text[j] = TAB) or (text[j] = SPACE)) do inc(j); //ignore leading spaces
     if (j > len) then break
     else if (text[j] = LF) then break
     else while (j <= len) and (text[j] > SPACE) do inc(j); //find trailing space
@@ -1756,18 +1509,18 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-procedure TText32.DrawInternal(bitmap: TBitmap32; const text: UnicodeString;
+procedure TText32.Draw(bitmap: TBitmap32; const text: UnicodeString;
   ttFont: TTrueTypeFont; color: TColor32);
 var
   i: integer;
   fontCacheAssigned: boolean;
   ppts: TArrayOfArrayOfArrayOfFixedPoint;
   pos: TFloatPoint;
-{$IFDEF GR32_PolygonsEx}
   ppts2: TArrayOfArrayOfFloatPoint;
-{$ENDIF}
+  PolyPolygonFn: TPolyPolygonFunc;
 begin
   if text = '' then exit;
+  PolyPolygonFn := PolyPolygonFunction[fLCDDraw]^;
   fontCacheAssigned := assigned(ttFont);
   if not fontCacheAssigned then
     ttFont := TTrueTypeFont.Create(bitmap.Font);
@@ -1775,12 +1528,8 @@ begin
     GetDrawInfo(text, ttFont, FloatPoint(fCurrentPos), pos, ppts);
     for i := 0 to high(ppts) do
     begin
-      {$IFDEF GR32_PolygonsEx}
       ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
-      PolyPolygonFS(bitmap, ppts2, color, pfWinding);
-      {$ELSE}
-      PolyPolygonXS(bitmap, ppts[i], color, pfWinding);
-      {$ENDIF}
+      PolyPolygonFn(bitmap, ppts2, color, pfWinding);
     end;
     fCurrentPos := FixedPoint(pos);
   finally
@@ -1789,43 +1538,11 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-procedure TText32.DrawInternalLCD(bitmap: TBitmap32; const text: UnicodeString;
-  ttFont: TTrueTypeFont; color: TColor32);
-var
-  fontCacheAssigned: boolean;
-  pos: TFloatPoint;
-  ppts: TArrayOfArrayOfArrayOfFixedPoint;
-begin
-  if text = '' then exit;
-  fontCacheAssigned := assigned(ttFont);
-  if not fontCacheAssigned then
-    ttFont := TTrueTypeFont.Create(bitmap.Font);
-  try
-    GetDrawInfo(text, ttFont, FloatPoint(fCurrentPos), pos, ppts);
-    LCDPolygonSmoothing(bitmap, fTmpBmp, ppts, color);
-    fCurrentPos := FixedPoint(pos);
-  finally
-    if not fontCacheAssigned then ttFont.Free;
-  end;
-end;
-//------------------------------------------------------------------------------
-
-procedure TText32.Draw(bitmap: TBitmap32; const text: UnicodeString;
-  ttFont: TTrueTypeFont; color: TColor32);
-begin
-  if fLCDDraw then
-    DrawInternalLCD(bitmap, text, ttFont, color) else
-    DrawInternal(bitmap, text, ttFont, color);
-end;
-//------------------------------------------------------------------------------
-
 procedure TText32.Draw(bitmap: TBitmap32; X, Y: single;
   const text: UnicodeString; ttFont: TTrueTypeFont; color: TColor32);
 begin
   SetCurrentPos(FixedPoint(X, Y));
-  if fLCDDraw then
-    DrawInternalLCD(bitmap, text, ttFont, color) else
-    DrawInternal(bitmap, text, ttFont, color);
+  Draw(bitmap, text, ttFont, color);
 end;
 //------------------------------------------------------------------------------
 
@@ -1835,22 +1552,15 @@ procedure TText32.Draw(bitmap: TBitmap32; const path: array of TFixedPoint;
 var
   i: integer;
   glyphPts: TArrayOfArrayOfArrayOfFixedPoint;
-{$IFDEF GR32_PolygonsEx}
   ppts2: TArrayOfArrayOfFloatPoint;
-{$ENDIF}
+  PolyPolygonFn: TPolyPolygonFunc;
 begin
   if text = '' then exit;
   glyphPts := GetEx(path, text, ttFont, alignH, alignV, true, offsetFromLine);
-  if fLCDDraw then
-    LCDPolygonSmoothing(bitmap, fTmpBmp, glyphPts, color)
-  else
-    for i := 0 to high(glyphPts) do
-      {$IFDEF GR32_PolygonsEx}
-      ppts2 := MakeArrayOfArrayOfFloatPoints(glyphPts[i]);
-      PolyPolygonFS(bitmap, ppts2, color, pfWinding);
-      {$ELSE}
-      PolyPolygonXS(bitmap, glyphPts[i], color, pfWinding);
-      {$ENDIF}
+  PolyPolygonFn := PolyPolygonFunction[fLCDDraw]^;
+  for i := 0 to high(glyphPts) do
+    ppts2 := MakeArrayOfArrayOfFloatPoints(glyphPts[i]);
+    PolyPolygonFn(bitmap, ppts2, color, pfWinding);
 end;
 //------------------------------------------------------------------------------
 
@@ -1858,38 +1568,22 @@ procedure TText32.DrawAndOutline(bitmap: TBitmap32; X, Y: single;
   const text: UnicodeString; ttFont: TTrueTypeFont;
   outlinePenWidth: single; outlineColor, fillColor: TColor32);
 var
-  i,j: integer;
+  i: integer;
   ppts: TArrayOfArrayOfArrayOfFixedPoint;
   NextInsertionPt: TFloatPoint;
-{$IFDEF GR32_PolygonsEx}
   ppts2: TArrayOfArrayOfFloatPoint;
-{$ENDIF}
+  PolyPolygonFn: TPolyPolygonFunc;
 begin
   if text = '' then exit;
   ppts := GetEx(X, Y, text, ttFont, NextInsertionPt);
 
-  if AlphaComponent(fillColor) > 0 then
+  PolyPolygonFn := PolyPolygonFunction[fLCDDraw]^;
+  for i := 0 to high(ppts) do
   begin
-    for i := 0 to high(ppts) do
-      {$IFDEF GR32_PolygonsEx}
-      ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
-      PolyPolygonFS(bitmap, ppts2, fillColor, pfWinding);
-      {$ELSE}
-      PolyPolygonXS(bitmap, ppts[i], fillColor, pfWinding);
-      {$ENDIF}
-  end;
-
-  with TLine32.Create do
-  try
-    EndStyle := esClosed;
-    for i := 0 to high(ppts) do
-      for j := 0 to high(ppts[i]) do
-      begin
-        SetPoints(ppts[i][j]);
-        Draw(bitmap, outlinePenWidth, outlineColor);
-      end;
-  finally
-    free;
+    ppts2 := MakeArrayOfArrayOfFloatPoints(ppts[i]);
+    if AlphaComponent(fillColor) > 0 then
+      PolyPolygonFn(bitmap, ppts2, fillColor, pfWinding);
+    PolyPolylineFS(bitmap, ppts2, outlineColor, true, outlinePenWidth);
   end;
 end;
 //------------------------------------------------------------------------------
@@ -2196,11 +1890,17 @@ begin
 
   if (rec.Left = rec.Right) or (rec.Top = rec.Bottom) then exit;
   textRec := FloatRect(rec);
-  
+
   for i := 0 to high(result) do
     for j := 0 to high(result[i]) do
       for k := 0 to high(result[i][j]) do
         TransformPt(result[i][j][k]);
+end;
+//------------------------------------------------------------------------------
+
+procedure TText32.SetLCDDraw(value: boolean);
+begin
+  fLCDDraw := value;
 end;
 //------------------------------------------------------------------------------
 
@@ -2256,30 +1956,21 @@ function TText32.GetInflatedEx(X, Y, delta: single;
   const text: UnicodeString; ttFont: TTrueTypeFont;
   out NextInsertionPt: TFloatPoint): TArrayOfArrayOfArrayOfFixedPoint;
 var
-  i,j,highI: integer;
+  i,j,highI,highJ: integer;
+  pppts: TArrayOfArrayOfArrayOfFloatPoint;
 begin
   result := GetEx(X, Y, text, ttFont, NextInsertionPt);
   highI := high(result);
   if (highI < 0) or (delta = 0) then exit;
 
-  with TLine32.Create do
-  try
-    EndStyle := esClosed;
-    LineWidth := abs(delta);
-    for i := 0 to highI do
-    begin
-      for j := 0 to high(result[i]) do
-      begin
-        SetPoints(result[i][j]);
-        //nb: Properly constucted TrueType fonts should draw glyph outlines in
-        //a clockwise direction and glyph 'holes' in an anti-clockwise direction
-        if delta < 0 then
-          result[i][j] := GetRightPoints else
-          result[i][j] := GetLeftPoints;
-      end;
-    end;
-  finally
-    free;
+  delta := delta/2;
+  setlength(pppts, highI +1);
+  for i := 0 to highI do
+  begin
+    highJ := high(result[i]);
+    pppts[i] := MakeArrayOfArrayOfFloatPoints(result[i]);
+    for j := 0 to highJ do pppts[i][j] := Grow(pppts[i][j], delta);
+    result[i] := MakeArrayOfArrayOfFixedPoints(pppts[i]);
   end;
 end;
 
@@ -2338,56 +2029,17 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-procedure SimpleTextLCD(bmp: TBitmap32; font: TFont; X, Y: integer;
-  const wideText: UnicodeString; color: TColor32);
+procedure SetLcdDrawDefault;
 var
-  i,w: integer;
-  text32: TText32;
-  ttf: TTrueTypeFont;
-  pos: TFloatPoint;
-  ppts: TArrayOfArrayOfArrayOfFixedPoint;
-  tm: TTextMetric;
-  otm: TOutlineTextmetric;
+  fontSmoothingEnabled: longBool;
 begin
-  if assigned(font) and not TTrueTypeFont.IsValidTTFont(font) then exit;
-  if (bmp.Empty) or (Length(wideText) = 0) then Exit;
-
-  if not assigned(font) then font := bmp.Font;
-
-  text32 := TText32.Create;
-  ttf := TrueTypeFontClass.Create(font);
-  try
-    //one of the few places where 'hinting' can marginally improve things ...
-    ttf.Hinted := true;
-    text32.GetDrawInfo(wideText, ttf, FloatPoint(X,Y), pos, ppts);
-    LCDPolygonSmoothing(bmp, nil, ppts, color);
-
-    // Underline support
-    if (fsUnderline in font.Style) then
-    begin
-      if ttf.GetOutlineTextMetrics(otm) then
-      begin
-        ttf.GetTextMetrics(tm);
-        text32.ClearTransformations;
-        w := round(text32.GetTextWidth(wideText, ttf));
-        i := tm.tmAscent -
-          otm.otmsUnderscorePosition - otm.otmsUnderscoreSize div 2;
-        bmp.FillRect(X, Y+i, X+w, Y+i + otm.otmsUnderscoreSize, color);
-      end;
-    end;
-
-  finally
-    ttf.Free;
-    text32.Free;
-  end;
+  SystemParametersInfo(SPI_GETFONTSMOOTHING, 0, @fontSmoothingEnabled, 0);
+  Text32LCDDrawDefault := fontSmoothingEnabled;
 end;
 //------------------------------------------------------------------------------
 
 initialization
-  lut := TLCDDistributionLut.Create;
-
-finalization
-  lut.Free;
+  SetLcdDrawDefault;
 
 {$ENDIF} //MSWINDOWS
 

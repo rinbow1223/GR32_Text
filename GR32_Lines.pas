@@ -18,36 +18,25 @@ unit GR32_Lines;
  * The Initial Developer of the Original Code is
  * Angus Johnson <angus@angusj.com>.
  *
- * Portions created by the Initial Developer are Copyright (C) 2008-2010
+ * Portions created by the Initial Developer are Copyright (C) 2008-2012
  * the Initial Developer. All Rights Reserved.
  *
  * Acknowledgements:
- * The Grow algorithm is derived from TPolygon32.Grow in the GR32_Polygons unit.
  * The mitering, bevelling and rounding functions contained in Grow are based on
- * code from Mattias Andersson's GR32_VectorUtils unit in VPR ...
+ * code from Mattias Andersson's VPR library ...
  * http://vpr.sourceforge.net/
  *
- * Version 3.93 (Last updated 17-Nov-2010)
+ * Version 4.0 (Last updated 5-Aug-2012)
  *
  * END LICENSE BLOCK **********************************************************)
 
 interface
 
 {$I GR32.inc}
-{$IFDEF COMPILER7}
 {$WARN UNSAFE_CODE OFF}
-{$ENDIF}
-
-{.$DEFINE GR32_PolygonsEx}
-//nb: if you uncomment DEFINE GR32_PolygonsEx here,
-//    make sure you also do the same in GR32_Misc.
 
 uses
-  Windows, Classes, SysUtils, Math,
-  GR32, GR32_LowLevel, GR32_Blend, GR32_Transforms,
-{$IFDEF GR32_PolygonsEx}
-  GR32_PolygonsEx, GR32_VPR,
-{$ENDIF}
+  Windows, Classes, SysUtils, Math, GR32, GR32_LowLevel, GR32_Blend, GR32_Transforms,
   GR32_Math, GR32_Polygons, GR32_Misc;
 
 type
@@ -126,7 +115,7 @@ type
     fLinePoints     : TArrayOfFixedPoint;
     fLeftPoints     : TArrayOfFixedPoint;
     fRightPoints    : TArrayOfFixedPoint;
-    fPolygon32      : {$IFDEF GR32_PolygonsEx} TPolygon32Ex; {$ELSE} TPolygon32; {$ENDIF}
+    fPolygon32      : TPolygon32Ex;
     fStartArrow     : TArrowHead;
     fEndArrow       : TArrowHead;
     fLineWidth      : single;
@@ -144,10 +133,6 @@ type
       const colors: array of TColor32; edgeColor: TColor32 = $00000000);
     procedure DrawGradientVert(bitmap: TBitmap32; penWidth: single;
       const colors: array of TColor32; edgeColor: TColor32 = $00000000);
-    {$IFNDEF GR32_PolygonsEx}
-    function GetAntialiasMode: TAntialiasMode;
-    procedure SetAntialiasMode(aaMode: TAntialiasMode);
-    {$ENDIF}
   protected
     procedure ForceRebuild;
   public
@@ -215,10 +200,6 @@ type
     function Points: TArrayOfFixedPoint;
     function GetArrowTruncatedPoints: TArrayOfFixedPoint;
 
-    {$IFNDEF GR32_PolygonsEx}
-    property  AntialiasMode: TAntialiasMode read
-      GetAntialiasMode write SetAntialiasMode default am16times;
-    {$ENDIF}
     property ArrowStart: TArrowHead read fStartArrow;
     property ArrowEnd: TArrowHead read fEndArrow;
     property EndStyle: TEndStyle read fEndStyle write SetEndStyle;
@@ -366,7 +347,7 @@ begin
   a := a1;
   for I := 0 to N do
   begin
-    SinCos(a, r, dy, dx);
+    GR32_Math.SinCos(a, r, dy, dx);
     Result[I].X := Fixed(pt.X + dx);
     Result[I].Y := Fixed(pt.Y + dy);
     a := a + da;
@@ -494,7 +475,7 @@ var
   begin
     dx := (p2.X - p1.X)*FixedToFloat;
     dy := (p2.Y - p1.Y)*FixedToFloat;
-    d := Hypot(dx, dy);
+    d := GR32_Math.Hypot(dx, dy);
     if d = 0 then exit;
     dx := dx / d;
     dy := dy / d;
@@ -826,14 +807,14 @@ var
     pt, NextP, PrevP: TFixedPoint;
   begin
     //(N1.X * N2.Y - N2.X * N1.Y) == unit normal "cross product" == sin(angle)
-    //http://en.wikipedia.org/wiki/Cross_product  
+    //http://en.wikipedia.org/wiki/Cross_product
     //used here to find if an angle is greater than or less than 180º.
     angleIsConcave := (N1.X * N2.Y - N2.X * N1.Y) * dist < 0;
     //(N1.X * N2.X + N1.Y * N2.Y) == unit normal "dot product" == cos(angle)
     //http://en.wikipedia.org/wiki/Dot_product
     //R = 1 + cos(angle). 0 <= R <= 2.
     //R --> 0 as angle --> -180º or as angle --> 180º.
-    R := 1 + (N1.X*N2.X + N1.Y*N2.Y);
+    R := 1 + (N1.X*N2.X + N1.Y*N2.Y); //1 - cos(ß)  (range: 0 <= R <= 2)
     if angleIsConcave and (R <> 0) then
     begin
       //Sometimes an inner miter can 'pop out' between the lines constructing
@@ -890,7 +871,8 @@ var
   begin
     angleIsConcave := (N1.X * N2.Y - N2.X * N1.Y) * dist < 0;
     //R --> 0 as angle --> -180º and as angle --> 180º.
-    R := 1 + N1.X*N2.X + N1.Y*N2.Y;
+
+    R := 1 + N1.X*N2.X + N1.Y*N2.Y; //1 - cos(ß)  (range: 0 <= R <= 2)
     if angleIsConcave and (R <> 0) then
     begin
       NextP := GetPerpendicularPt(pts[NextI], normals[I], dist);
@@ -1010,7 +992,11 @@ begin
     miterLimit := 1;
     if joinStyle = jsMitered then joinStyle := jsBevelled;
   end;
-  RMin := 2/sqr(miterLimit); //val == max relative distance of join pt from pt
+
+  //MiterLimit = sqrt(2/(1 - cos(ß)))
+  //Sqr(MiterLimit) = 2/(1 - cos(ß))
+  //1 - cos(ß) = 2/Sqr(MiterLimit) = RMin;
+  RMin := 2/sqr(miterLimit);
 
   //make Normals ...
   highI := high(pts);
@@ -1471,10 +1457,9 @@ constructor TLine32.Create;
 begin
   FillMode := pfWinding;
 
-  fPolygon32 := {$IFDEF GR32_PolygonsEx} TPolygon32Ex. {$ELSE} TPolygon32. {$ENDIF} Create;
+  fPolygon32 := TPolygon32Ex.Create;
   fPolygon32.Closed := true;
   fPolygon32.Antialiased := true;
-  fPolygon32.AntialiasMode := am16times;
 
   fLineWidth := 1;
   fMiterLimit := 2;
@@ -1495,20 +1480,6 @@ begin
   inherited;
 end;
 //------------------------------------------------------------------------------
-
-{$IFNDEF GR32_PolygonsEx}
-function TLine32.GetAntialiasMode: TAntialiasMode;
-begin
-  result := fPolygon32.AntialiasMode;
-end;
-//------------------------------------------------------------------------------
-
-procedure TLine32.SetAntialiasMode(aaMode: TAntialiasMode);
-begin
-  fPolygon32.AntialiasMode := aaMode;
-end;
-//------------------------------------------------------------------------------
-{$ENDIF}
 
 procedure TLine32.ForceRebuild;
 begin
@@ -1700,7 +1671,7 @@ var
 begin
   ForceRebuild;
   //rotates in an anticlockwise direction if radians > 0;
-  sincos(radians, sinAng, cosAng);
+  GR32_Math.sincos(radians, sinAng, cosAng);
   orig := FixedPoint(origin);
   for i := 0 to high(fLinePoints) do
     with fLinePoints[i] do
@@ -1872,7 +1843,7 @@ var
   begin
     if (count < 1) then exit;
     lineAngle := GetAngleOfPt2FromPt1(topLeft, topRight);
-    SinCos(lineAngle, sinAng, cosAng);
+    GR32_Math.SinCos(lineAngle, sinAng, cosAng);
     stipCntr := stipCntr +
       (stipOffsetX*cosAng-stipOffsetY*sinAng)*FixedToFloat*bitmap.StippleStep;
 

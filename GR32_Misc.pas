@@ -15,39 +15,25 @@ unit GR32_Misc;
  *
  * The Original Code is GR32_Misc.
  * The Initial Developer of the Original Code is Angus Johnson and is
- * Copyright (C) 2009-2010 the Initial Developer. All Rights Reserved.
+ * Copyright (C) 2009-2012 the Initial Developer. All Rights Reserved.
  *
- * Version 3.92 (Last updated 10-Nov-2010)
+ * Version 4.0 (Last updated 5-Aug-2012)
  *
  * END LICENSE BLOCK **********************************************************)
 
 interface
 
 {$I GR32.inc}
-{$IFDEF COMPILER7}
-{$WARN UNSAFE_CODE OFF}
-{$ENDIF}
-
-{.$DEFINE GR32_PolygonsEx}
 
 uses
-{$IFDEF CLX}
-  Qt, Types,
-  {$IFDEF LINUX}Libc, {$ENDIF}
-  {$IFDEF MSWINDOWS}Windows, {$ENDIF}
-{$ELSE}
-  Windows, Types,
-{$ENDIF}
-  Classes, SysUtils, Math, GR32, GR32_LowLevel, GR32_Blend, GR32_Transforms,
-{$IFDEF GR32_PolygonsEx}
-  GR32_PolygonsEx, GR32_VPR,
-{$ENDIF}
-  GR32_Math, GR32_Polygons;
+  Windows, Classes, SysUtils, Math, GR32, GR32_LowLevel, GR32_Blend,
+  GR32_Transforms, GR32_Math, GR32_Polygons;
 
 type
   TBalloonPos = (bpNone, bpTopLeft, bpTopRight, bpBottomLeft, bpBottomRight);
   TCorner     = (cTopLeft, cTopRight, cBottomLeft, cBottomRight);
   TArrayOfArrayOfArrayOfFixedPoint = array of TArrayOfArrayOfFixedPoint;
+  TArrayOfArrayOfArrayOfFloatPoint = array of TArrayOfArrayOfFloatPoint;
 
 procedure OffsetPoint(var pt: TFloatPoint; dx, dy: single); overload;
 procedure OffsetPoint(var pt: TFixedPoint; dx, dy: single); overload;
@@ -77,6 +63,7 @@ function MakeArrayOfFixedPoints(const rec: TRect): TArrayOfFixedPoint; overload;
 function MakeArrayOfFixedPoints(const rec: TFixedRect): TArrayOfFixedPoint; overload;
 function MakeArrayOfFixedPoints(const rec: TFloatRect): TArrayOfFixedPoint; overload;
 function MakeArrayOfFixedPoints(const a: TArrayOfFloatPoint): TArrayOfFixedPoint; overload;
+function MakeArrayOfArrayOfFixedPoints(const a: TArrayOfArrayOfFloatPoint): TArrayOfArrayOfFixedPoint;
 
 function MakeArrayOfFloatPoints(const a: array of single): TArrayOfFloatPoint; overload;
 function MakeArrayOfFloatPoints(const a: TArrayOfFixedPoint): TArrayOfFloatPoint; overload;
@@ -95,7 +82,9 @@ function StripDuplicatePoints(const pts: array of TFixedPoint): TArrayOfFixedPoi
 function StripDuplicatePoints(const pts: TArrayOfFixedPoint): TArrayOfFixedPoint; overload;
 
 function GetPointAtAngleFromPoint(const pt: TFixedPoint;
-  const dist, radians: single): TFixedPoint;
+  const dist, radians: single): TFixedPoint; overload;
+function GetPointAtAngleFromPoint(const pt: TFloatPoint;
+  const dist, radians: single): TFloatPoint; overload;
 
 function SquaredDistBetweenPoints(const pt1, pt2: TFixedPoint): single; overload;
 function SquaredDistBetweenPoints(const pt1, pt2: TFloatPoint): single; overload;
@@ -119,7 +108,11 @@ function RotatePoints(const pts: array of TFixedPoint;
 procedure RotatePolyPoints(var pts: TArrayOfArrayOfFixedPoint;
   origin: TFixedPoint; radians: single);
 
-function MidPoint(pt1, pt2: TFixedPoint): TFixedPoint;
+function MidPoint(pt1, pt2: TFixedPoint): TFixedPoint; overload;
+function MidPoint(pt1, pt2: TFloatPoint): TFloatPoint; overload;
+
+function ExtendLine(const A, B: TFloatPoint; dist: single): TFloatPoint;
+function GetBezierPoint(const ctrlPts: TArrayOfFloatPoint; t: single): TFloatPoint;
 
 function GetAngleOfPt2FromPt1(pt1, pt2: TFixedPoint): single; overload;
 function GetAngleOfPt2FromPt1(pt1, pt2: TFloatPoint): single; overload;
@@ -192,6 +185,9 @@ function GetPtOnEllipseFromAngleEccentric(const ellipseRect: TFloatRect;
 function GetPointsAroundEllipse(const ellipseRect:
   TFloatRect; PointCount: integer): TArrayOfFixedPoint;
 
+//nb: startPt and endPt form radial lines with the center of ellipseRect.
+//    the points of intersection of these lines and the ellipse that are
+//    closest to startPt and endPt define the true starting and ending points.
 function GetArcPoints(const ellipseRect: TFloatRect;
   startPt, endPt: TFloatPoint): TArrayOfFixedPoint; overload;
 
@@ -237,6 +233,8 @@ function GetUnitNormal(const pt1, pt2: TFixedPoint): TFloatPoint; overload;
 function GetUnitNormal(const pt1, pt2: TFloatPoint): TFloatPoint; overload;
 
 function NearlyMatch(const s1, s2, tolerance: single): boolean;
+
+function ReflectPoint(const pivotPt, pt: TFixedPoint): TFixedPoint;
 
 //quick and easy (anti-aliased) lines of 1px line width ...
 procedure SimpleLine(bitmap: TBitmap32;
@@ -316,7 +314,6 @@ const
 
 ////////////////////////////////////////////////////////////////////////////////
 
-{$IFDEF GR32_PolygonsEx}
 type
   //TPolygon32Ex - is a wrapper class that redirects polygon rasterisation
   //to Mattias Andersson's GR32_PolygonsEx unit by emulating a small subset
@@ -326,7 +323,6 @@ type
     fPPts: TArrayOfArrayOfFixedPoint;
     fClosed: boolean;               //ignored (always true)
     fAntialiased: boolean;          //ignored (always true)
-    fAntialiasMode: TAntialiasMode; //ignored
     fFillMode: TPolyFillMode;
   public
     constructor Create;
@@ -340,10 +336,8 @@ type
     procedure DrawEdge(Bitmap: TBitmap32; Color: TColor32);
     property  Closed: Boolean read FClosed write FClosed;
     property  Antialiased: Boolean read fAntialiased write fAntialiased;
-    property  AntialiasMode: TAntialiasMode read FAntialiasMode write FAntialiasMode;
     property  FillMode: TPolyFillMode read FFillMode write FFillMode;
   end;
-{$ENDIF}
 ////////////////////////////////////////////////////////////////////////////////
 
 const
@@ -364,8 +358,6 @@ const
   qbezier_tolerance = 0.5;
 
 implementation
-
-{$IFDEF GR32_PolygonsEx}
 
 //------------------------------------------------------------------------------
 // TPolygon32Ex methods ...
@@ -418,7 +410,7 @@ begin
   tmp := AAFixedToAAFloat(fPPts);
   PolyPolygonFS(Bitmap, tmp, FillColor, fFillMode);
   if (OutlineColor and $FF000000) <> 0 then
-    PolyPolylineXS(Bitmap, fPPts, OutlineColor, true);
+    PolyPolylineFS(Bitmap, tmp, OutlineColor, true);
 end;
 //------------------------------------------------------------------------------
 
@@ -430,7 +422,7 @@ begin
   tmp := AAFixedToAAFloat(fPPts);
   PolyPolygonFS(Bitmap, tmp, Filler, fFillMode);
   if (OutlineColor and $FF000000) <> 0 then
-    PolyPolylineXS(Bitmap, fPPts, OutlineColor, true);
+    PolyPolylineFS(Bitmap, tmp, OutlineColor, true);
 end;
 //------------------------------------------------------------------------------
 
@@ -456,16 +448,53 @@ end;
 //------------------------------------------------------------------------------
 
 procedure TPolygon32Ex.DrawEdge(Bitmap: TBitmap32; Color: TColor32);
+var
+  tmp: TArrayOfArrayOfFloatPoint;
 begin
+  tmp := AAFixedToAAFloat(fPPts);
   Bitmap.BeginUpdate;
-  PolyPolylineXS(Bitmap, fPPts, Color, true);
+  PolyPolylineFS(Bitmap, tmp, Color, true);
   Bitmap.EndUpdate;
   Bitmap.Changed;
 end;
-{$ENDIF}
 
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
+
+function TurnsLeft(const a, b, c: TFloatPoint): boolean;
+var
+  ab,bc: TFloatPoint;
+begin
+  //determinant of 2x2 matrix > 0 -> turning left ...
+  ab.X := b.X - a.X; ab.Y := b.Y - a.Y;
+  bc.X := b.X - c.X; bc.Y := b.Y - c.Y;
+  result := (ab.x * bc.y - ab.y * bc.x) > 0;
+end;
+//---------------------------------------------------------------------------
+
+function GetAngleOfPointsABC(const a, b, c: TFloatPoint): double;
+var
+  ab,bc: TFloatPoint;
+  dotProd, abSqr, bcSqr, cosSqr, cos2, alpha2: single;
+begin
+  //http://stackoverflow.com/questions/3486172/angle-between-3-points/3487062
+  ab.X := b.X - a.X;
+  ab.Y := b.Y - a.Y;
+  bc.X := b.X - c.X;
+  bc.Y := b.Y - c.Y;
+  dotProd := ab.X * bc.X + ab.Y * bc.Y;
+  abSqr := ab.x * ab.x + ab.y * ab.y;
+  bcSqr := bc.x * bc.x + bc.y * bc.y;
+  cosSqr := dotProd * dotProd / abSqr / bcSqr;
+  cos2 := 2 * cosSqr - 1;
+  if (cos2 <= -1) then alpha2 := pi
+  else if (cos2 >= 1) then alpha2 := 0
+  else alpha2 := arccos(cos2);
+  result := alpha2 / 2;
+  if (dotProd < 0) then result := pi - result;
+  if (ab.x * bc.y - ab.y * bc.x) < 0 then result := -result;
+end;
+//---------------------------------------------------------------------------
 
 procedure OffsetPoint(var pt: TFloatPoint; dx, dy: single);
 begin
@@ -693,7 +722,7 @@ end;
 function MakeArrayOfFixedPoints(const rec: TRect): TArrayOfFixedPoint;
 begin
   setlength(result, 4);
-  with FixedRect(rec) do
+  with GR32.FixedRect(rec) do
   begin
     result[0].X := Left;
     result[0].Y := Top;
@@ -783,6 +812,16 @@ begin
   len := length(a);
   setlength(result, len);
   for i := 0 to len -1 do result[i] := MakeArrayOfFloatPoints(a[i]);
+end;
+//------------------------------------------------------------------------------
+
+function MakeArrayOfArrayOfFixedPoints(const a: TArrayOfArrayOfFloatPoint): TArrayOfArrayOfFixedPoint;
+var
+  i, len: integer;
+begin
+  len := length(a);
+  setlength(result, len);
+  for i := 0 to len -1 do result[i] := MakeArrayOfFixedPoints(a[i]);
 end;
 //------------------------------------------------------------------------------
 
@@ -887,9 +926,20 @@ function GetPointAtAngleFromPoint(const pt: TFixedPoint;
 var
   sinAng, cosAng: single;
 begin
-  SinCos(radians, sinAng, cosAng);
+  GR32_Math.SinCos(radians, sinAng, cosAng);
   result.X := round(dist * cosAng*FixedOne) + pt.X;
   result.Y := -round(dist * sinAng *FixedOne) + pt.Y; //nb: Y axis is +ve down
+end;
+//------------------------------------------------------------------------------
+
+function GetPointAtAngleFromPoint(const pt: TFloatPoint;
+  const dist, radians: single): TFloatPoint; overload;
+var
+  sinAng, cosAng: single;
+begin
+  GR32_Math.SinCos(radians, sinAng, cosAng);
+  result.X := dist * cosAng + pt.X;
+  result.Y := -dist * sinAng + pt.Y; //nb: Y axis is +ve down
 end;
 //------------------------------------------------------------------------------
 
@@ -915,13 +965,13 @@ end;
 
 function DistBetweenPoints(const pt1, pt2: TFixedPoint): single;
 begin
-  Result := hypot((pt2.X - pt1.X)*FixedToFloat,(pt2.Y - pt1.Y)*FixedToFloat);
+  Result := GR32_Math.hypot((pt2.X - pt1.X)*FixedToFloat,(pt2.Y - pt1.Y)*FixedToFloat);
 end;
 //------------------------------------------------------------------------------
 
 function DistBetweenPoints(const pt1, pt2: TFloatPoint): single;
 begin
-  Result := hypot((pt2.X - pt1.X),(pt2.Y - pt1.Y));
+  Result := GR32_Math.hypot((pt2.X - pt1.X),(pt2.Y - pt1.Y));
 end;
 //------------------------------------------------------------------------------
 
@@ -949,7 +999,7 @@ var
   cpol: TFloatPoint;
 begin
   cpol := ClosestPointOnLine(pt, lnA, lnB, ForceResultBetweenLinePts);
-  result := hypot(pt.X - cpol.X, pt.Y- cpol.Y);
+  result := GR32_Math.hypot(pt.X - cpol.X, pt.Y- cpol.Y);
 end;
 //------------------------------------------------------------------------------
 
@@ -1019,7 +1069,7 @@ begin
     exit;
   end;
   //rotates in an anticlockwise direction if radians > 0;
-  sincos(radians, sinAng, cosAng);
+  GR32_Math.sincos(radians, sinAng, cosAng);
   pt.X := pt.X - origin.X;
   pt.Y := pt.Y - origin.Y;
   result.X := round((pt.X * cosAng) + (pt.Y * sinAng) + origin.X);
@@ -1040,7 +1090,7 @@ begin
     for i := 0 to high(pts) do result[i] := pts[i];
     exit;
   end;
-  sincos(radians, sinAng, cosAng);
+  GR32_Math.sincos(radians, sinAng, cosAng);
   for i := 0 to high(pts) do
   begin
     tmp.X := pts[i].X - origin.X;
@@ -1063,7 +1113,7 @@ begin
     for i := 0 to high(pts) do result[i] := pts[i];
     exit;
   end;
-  sincos(radians, sinAng, cosAng);
+  GR32_Math.sincos(radians, sinAng, cosAng);
   for i := 0 to high(pts) do
   begin
     result[i].X := round((pts[i].X * cosAng) + (pts[i].Y * sinAng));
@@ -1080,7 +1130,7 @@ var
   cosAng, sinAng: single;
 begin
   if radians = 0 then exit;
-  sincos(radians, sinAng, cosAng);
+  GR32_Math.sincos(radians, sinAng, cosAng);
   for i := 0 to high(pts) do
     for j := 0 to high(pts[i]) do
       with pts[i][j] do
@@ -1097,6 +1147,53 @@ function MidPoint(pt1, pt2: TFixedPoint): TFixedPoint;
 begin
   result.X := (pt1.X + pt2.X) div 2;
   result.Y := (pt1.Y + pt2.Y) div 2;
+end;
+//------------------------------------------------------------------------------
+
+function MidPoint(pt1, pt2: TFloatPoint): TFloatPoint;
+begin
+  result.X := (pt1.X + pt2.X) / 2;
+  result.Y := (pt1.Y + pt2.Y) / 2;
+end;
+//------------------------------------------------------------------------------
+
+function ExtendLine(const A, B: TFloatPoint; dist: single): TFloatPoint;
+var
+  lenAB: single;
+begin
+  lenAB :=  sqrt((A.x - B.x) * (A.x - B.x) + (A.y - B.y) * (A.y - B.y));
+  result.X := B.x - (B.x - A.x) / lenAB * dist;
+  result.Y := B.Y - (B.Y - A.Y) / lenAB * dist;
+end;
+//------------------------------------------------------------------------------
+
+function GetBezierPoint(const ctrlPts: TArrayOfFloatPoint; t: single): TFloatPoint;
+var
+  p01, p12, p23, p012, p123: TFloatPoint;
+begin
+  if length(ctrlPts) <> 4 then
+    raise exception.create('GetBezierPoint() requires 4 control points');
+  if t <= 0 then
+    result := ctrlPts[0]
+  else if t >= 1 then
+    result := ctrlPts[3]
+  else
+  begin
+    p01.X := (ctrlPts[1].X - ctrlPts[0].X) *t + ctrlPts[0].X;
+    p01.Y := (ctrlPts[1].Y - ctrlPts[0].Y) *t + ctrlPts[0].Y;
+    p12.X := (ctrlPts[2].X - ctrlPts[1].X) *t + ctrlPts[1].X;
+    p12.Y := (ctrlPts[2].Y - ctrlPts[1].Y) *t + ctrlPts[1].Y;
+    p23.X := (ctrlPts[3].X - ctrlPts[2].X) *t + ctrlPts[2].X;
+    p23.Y := (ctrlPts[3].Y - ctrlPts[2].Y) *t + ctrlPts[2].Y;
+
+    p012.X := (p12.X - p01.X) *t + p01.X;
+    p012.Y := (p12.Y - p01.Y) *t + p01.Y;
+    p123.X := (p23.X - p12.X) *t + p12.X;
+    p123.Y := (p23.Y - p12.Y) *t + p12.Y;
+
+    result.X := (p123.X - p012.X) *t + p012.X;
+    result.Y := (p123.Y - p012.Y) *t + p012.Y;
+  end;
 end;
 //------------------------------------------------------------------------------
 
@@ -1151,7 +1248,6 @@ begin
   end;
 end;
 //------------------------------------------------------------------------------
-
 
 //see: "The Point in Polygon Problem for Arbitrary Polygons" by Kai Hormann
 //     http://www2.in.tu-clausthal.de/~hormann/papers/Hormann.2001.TPI.pdf
@@ -1230,7 +1326,7 @@ end;
 
 function MakePoint(const pt: TFloatPoint): TPoint;
 begin
-  result := Point(round(pt.X),round(pt.Y));
+  result := GR32.Point(round(pt.X),round(pt.Y));
 end;
 //------------------------------------------------------------------------------
 
@@ -1381,7 +1477,7 @@ type
   end;
 
   PSortRecList = ^TSortRecList;
-  TSortRecList = array [0 .. MaxListSize -1] of TSortRec;
+  TSortRecList = array [0 .. sizeof(TSortRec) -1] of TSortRec;
   TArrayOfSortRec = array of TSortRec;
 
 function GetConvexHull(const polygon: TArrayOfFixedPoint): TArrayOfFixedPoint;
@@ -1491,15 +1587,10 @@ begin
   with bitmap do result.SetSize(width,height);
   highI := high(polygons);
   if highI < 0 then exit;
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := pfAlternate;
     AddPoints(polygons[0][0], length(polygons[0]));
     for i := 1 to highI do
@@ -1646,8 +1737,10 @@ var
   begin
     //assess flatness of curve ...
     //http://groups.google.com/group/comp.graphics.algorithms/tree/browse_frm/thread/d85ca902fdbd746e
-    if abs(p1.x + p3.x - 2*p2.x) + abs(p2.x + p4.x - 2*p3.x) +
-      abs(p1.y + p3.y - 2*p2.y) + abs(p2.y + p4.y - 2*p3.y) < cbezier_tolerance then
+    if abs(p1.x + p3.x - 2*p2.x) +
+      abs(p2.x + p4.x - 2*p3.x) +
+      abs(p1.y + p3.y - 2*p2.y) +
+      abs(p2.y + p4.y - 2*p3.y) < cbezier_tolerance then
     begin
       if resultCnt = length(result) then
         setLength(result, length(result) +128);
@@ -1919,7 +2012,7 @@ begin
   begin
     center.X := (right+left)/2;
     center.Y := (bottom+top)/2;
-    SinCos(eccentric_angle_radians, SinAng, CosAng);
+    GR32_Math.SinCos(eccentric_angle_radians, SinAng, CosAng);
     result.X := center.X + (right-left)/2*CosAng;
     //negative offset since Y is positive downwards ...
     result.Y := center.Y - (bottom-top)/2*SinAng;
@@ -2304,7 +2397,7 @@ begin
   angle_delta := rad360 / (PointCount*2);
   for i := 0 to PointCount*2 -1 do
   begin
-    SinCos(angle_delta *i, sinA, cosA);
+    GR32_Math.SinCos(angle_delta *i, sinA, cosA);
     if odd(i) then r := radius1 else r := radius2;
     result[i].X := Center.X + Fixed( r * cosA);
     result[i].Y := Center.Y + Fixed(-r * sinA); //nb: Y axis is +ve down
@@ -2478,7 +2571,7 @@ begin
   begin
     dx := Points[I].X - Points[I - 1].X;
     dy := Points[I].Y - Points[I - 1].Y;
-    d := Hypot(dx*FixedToFloat, dy*FixedToFloat);
+    d := GR32_Math.Hypot(dx*FixedToFloat, dy*FixedToFloat);
     if d = 0 then  Continue;
     dx := round(dx / d);
     dy := round(dy / d);
@@ -2513,7 +2606,7 @@ begin
     result := FloatPoint(0,0);
   end else
   begin
-    f := 1 / Hypot(dx, dy);
+    f := 1 / GR32_Math.Hypot(dx, dy);
     Result.X := dx * f;
     Result.Y := dy * f;
   end;
@@ -2532,7 +2625,7 @@ begin
     result := FloatPoint(0,0);
   end else
   begin
-    f := 1 / Hypot(dx, dy);
+    f := 1 / GR32_Math.Hypot(dx, dy);
     dx := dx * f;
     dy := dy * f;
   end;
@@ -2553,7 +2646,7 @@ begin
     result := FloatPoint(0,0);
   end else
   begin
-    f := 1 / Hypot(dx, dy);
+    f := 1 / GR32_Math.Hypot(dx, dy);
     dx := dx * f;
     dy := dy * f;
   end;
@@ -2587,15 +2680,10 @@ end;
 procedure SimpleFill(bitmap: TBitmap32; pts: array of TFixedPoint;
   edgeColor, fillColor: TColor32; aFillMode: TPolyFillMode = pfWinding);
 begin
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := aFillMode;
     AddPoints(pts[0], length(pts));
     Draw(Bitmap, edgeColor, fillColor);
@@ -2612,15 +2700,10 @@ var
 begin
   len := length(pts);
   if len = 0 then exit;
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := aFillMode;
     AddPoints(pts[0][0],length(pts[0]));
     for i := 1 to len -1 do
@@ -2641,15 +2724,10 @@ var
   i,highI: integer;
   pts2: TArrayOfFixedPoint;
 begin
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := aFillMode;
     highI := high(pts);
     SetLength(pts2, highI +1);
@@ -2670,15 +2748,10 @@ var
 begin
   len := length(pts);
   if len = 0 then exit;
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := aFillMode;
     pts2 := MakeArrayOfFixedPoints(pts[0]);
     AddPoints(pts2[0],length(pts2));
@@ -2718,15 +2791,10 @@ var
 begin
   len := length(pts);
   if len = 0 then exit;
-  {$IFDEF GR32_PolygonsEx}
   with TPolygon32Ex.Create do
-  {$ELSE}
-  with TPolygon32.Create do
-  {$ENDIF}
   try
     Closed := true;
     Antialiased := true;
-    AntialiasMode := am16times;
     FillMode := aFillMode;
     filler := TBitmapPolygonFiller.Create;
     try
@@ -2850,6 +2918,13 @@ end;
 function NearlyMatch(const s1, s2, tolerance: single): boolean;
 begin
   result := abs(s1 - s2) <= tolerance;
+end;
+//------------------------------------------------------------------------------
+
+function ReflectPoint(const pivotPt, pt: TFixedPoint): TFixedPoint;
+begin
+  result.X := pivotPt.X*2 - pt.X;
+  result.Y := pivotPt.Y*2 - pt.Y;
 end;
 //------------------------------------------------------------------------------
 
@@ -3179,7 +3254,7 @@ begin
       begin
         dy := p.Y - i;
         dx := p.X - j;
-        dist := hypot(dx, dy);
+        dist := GR32_Math.hypot(dx, dy);
         if dist > radiusPlus then
           //do nothing
         else if dist > radiusMinus then
@@ -3213,7 +3288,7 @@ begin
       begin
         dy := p.Y - i;
         dx := p.X - j;
-        dist := hypot(dx, dy);
+        dist := GR32_Math.hypot(dx, dy);
         if dist > radiusPlus then
           //do nothing
         else if dist > radiusMinus then

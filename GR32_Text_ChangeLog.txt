@@ -1,6 +1,10 @@
 GR32_Text.pas Change Log
 
-11 Nov 10 (ver 2.92)
+5 August 12 (ver 4.0)
+updated    - compiles with latest build of Graphics32 (which now includes
+           - Mattias Anderson's VPR polygon rendering code).
+
+11 Nov 10 (ver 3.92)
 updated  - compiler directives added to allow Mattias Andersson's VPR 
            polygon renderer to be used instead of the less accurate TPolygon32.
            

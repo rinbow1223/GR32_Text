@@ -15,9 +15,9 @@ unit GR32_Misc2;
  *
  * The Original Code is GR32_Misc2.
  * The Initial Developer of the Original Code is Angus Johnson and is
- * Copyright (C) 2009-2010 the Initial Developer. All Rights Reserved.
+ * Copyright (C) 2009-2012 the Initial Developer. All Rights Reserved.
  *
- * Version 3.92 (Last updated 10-Nov-2010)
+ * Version 4.0 (Last updated 5-Aug-2012)
  *
  * END LICENSE BLOCK **********************************************************)
 
@@ -26,22 +26,20 @@ interface
 
 {$I GR32.inc}
 
-{$IFDEF COMPILER7}
 {$WARN UNSAFE_CODE OFF}
 {$WARN UNSAFE_TYPE OFF}
 {$WARN UNSAFE_CAST OFF}
-{$ENDIF}
 
 //Use GDI+ if you wish to load or save images in formats other than BMP ...
 //(ie JPG, GIF, PNG, TIF, WMF & EMF formats)
-{$DEFINE USE_GDIPLUS}
+{.$DEFINE USE_GDIPLUS}
 
 
 uses
 {$IFDEF USE_GDIPLUS}
   GDIPAPI,
 {$ENDIF}
-  Windows, Types, SysUtils, classes, ActiveX, Graphics, GR32;
+  Windows, Types, SysUtils, classes, ActiveX, Graphics, GR32, GR32_Backends;
 
 
 {$IFNDEF UNICODE}

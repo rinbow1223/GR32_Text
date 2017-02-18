@@ -1,5 +1,9 @@
 GR32_Lines.pas Change Log
 
+5 August 12 (ver 4.0)
+updated    - compiles with latest build of Graphics32 (which now includes
+           - Mattias Anderson's VPR polygon rendering code).
+           
 17 Nov 10 (ver 3.93)
 updated    - improved drawing of line corners for 'stippled' TLines32.Draw() 
              method added in ver 3.92.
